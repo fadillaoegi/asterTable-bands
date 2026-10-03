@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -267,37 +268,54 @@ func parseLocal(local string, loc *time.Location) (time.Time, error) {
 	if err != nil || wall.Format("2006-01-02T15:04") != local {
 		return time.Time{}, validation("invalid local date or time")
 	}
-	// Search all plausible offsets and select the earliest instant: the first occurrence on fall-back.
-	var matches []time.Time
-	seen := map[int]bool{}
-	for h := -14; h <= 14; h++ {
-		for _, minute := range []int{0, 30, 45} {
-			off := h * 3600
-			if h >= 0 {
-				off += minute * 60
-			} else {
-				off -= minute * 60
-			}
-			if seen[off] {
-				continue
-			}
-			seen[off] = true
-			candidate := time.Date(wall.Year(), wall.Month(), wall.Day(), wall.Hour(), wall.Minute(), 0, 0, time.FixedZone("candidate", off)).UTC()
-			if candidate.In(loc).Format("2006-01-02T15:04") == local {
-				matches = append(matches, candidate)
-			}
-		}
-	}
+	matches := localDay(loc, wall)[wall.Format("15:04")]
 	if len(matches) == 0 {
 		return time.Time{}, errAPI(422, "invalid_local_time", "local time does not exist")
 	}
-	best := matches[0]
-	for _, t := range matches[1:] {
-		if t.Before(best) {
-			best = t
+	// localDay scans UTC in ascending order, so index zero is the first
+	// occurrence when a clock change repeats a local time.
+	return matches[0].In(loc), nil
+}
+
+// A location's rules are the source of truth for valid wall times. Indexing a
+// local calendar day by walking the bounded UTC interval avoids assumptions
+// about the shape of historical offsets (some include unusual minutes or
+// seconds), detects gaps, and retains both occurrences of folds.
+var localDayCache = struct {
+	sync.Mutex
+	days map[string]map[string][]time.Time
+}{days: make(map[string]map[string][]time.Time)}
+
+func localDay(loc *time.Location, wall time.Time) map[string][]time.Time {
+	key := loc.String() + "\x00" + wall.Format("2006-01-02")
+	localDayCache.Lock()
+	defer localDayCache.Unlock()
+	if day, ok := localDayCache.days[key]; ok {
+		return day
+	}
+
+	day := make(map[string][]time.Time, 24*60)
+	base := time.Date(wall.Year(), wall.Month(), wall.Day(), 0, 0, 0, 0, time.UTC)
+	// All IANA UTC offsets are within 24 hours. The margin also covers
+	// historical date-line transitions while keeping the scan bounded.
+	for instant, end := base.Add(-26*time.Hour), base.Add(50*time.Hour); instant.Before(end); instant = instant.Add(time.Second) {
+		zoned := instant.In(loc)
+		if zoned.Year() != wall.Year() || zoned.Month() != wall.Month() || zoned.Day() != wall.Day() || zoned.Second() != 0 {
+			continue
+		}
+		minute := zoned.Format("15:04")
+		day[minute] = append(day[minute], instant)
+	}
+	// Bound memory under arbitrary-date traffic. Eviction is intentionally
+	// simple because entries are immutable and inexpensive to rebuild.
+	if len(localDayCache.days) >= 128 {
+		for old := range localDayCache.days {
+			delete(localDayCache.days, old)
+			break
 		}
 	}
-	return best.In(loc), nil
+	localDayCache.days[key] = day
+	return day
 }
 
 func wallMinutes(hhmm string) (int, error) {

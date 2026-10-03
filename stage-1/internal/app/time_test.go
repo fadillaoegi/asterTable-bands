@@ -51,3 +51,32 @@ func TestReservationResponseUsesRestaurantOffsetAfterDatabaseReload(t *testing.T
 		t.Fatalf("ends_at = %v", got["ends_at"])
 	}
 }
+
+func TestParseLocalUsesHistoricalIANAOffset(t *testing.T) {
+	amsterdam, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseLocal("1938-01-03T12:00", amsterdam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Host zoneinfo releases disagree on whether pre-1940 Amsterdam aliases
+	// Brussels here. The resolver must follow the loaded database exactly.
+	want := time.Date(1938, 1, 3, 12, 0, 0, 0, amsterdam)
+	if !got.Equal(want) || got.Format("15:04") != "12:00" {
+		t.Fatalf("historical time = %s, want %s", got, want)
+	}
+	end := got.Add(90 * time.Minute)
+	if end.Sub(got) != 90*time.Minute || end.In(amsterdam).Format("15:04") != "13:30" {
+		t.Fatalf("historical absolute end = %s", end.Format("2006-01-02T15:04:05-07:00"))
+	}
+
+	// Exercise the exact non-whitelisted +00:20 offset independently of the
+	// host's Amsterdam alias choice.
+	plusTwenty := time.FixedZone("historical-plus-twenty", 20*60)
+	got, err = parseLocal("1938-01-03T12:00", plusTwenty)
+	if err != nil || got.Format("2006-01-02T15:04:05-07:00") != "1938-01-03T12:00:00+00:20" {
+		t.Fatalf("+00:20 time = %s, err=%v", got.Format("2006-01-02T15:04:05-07:00"), err)
+	}
+}
