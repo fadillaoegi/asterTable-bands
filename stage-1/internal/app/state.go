@@ -253,7 +253,7 @@ func (a *App) importState(w http.ResponseWriter, r *http.Request) {
 	var invalid bool
 	err = tx.QueryRow(r.Context(), `SELECT EXISTS (
         SELECT 1 FROM reservations r
-        LEFT JOIN restaurant_tables t ON t.id=r.table_id
+		LEFT JOIN restaurant_tables t ON t.restaurant_id=r.restaurant_id AND t.id=r.table_id
         LEFT JOIN reservation_occupancies o ON o.reservation_id=r.id
         WHERE t.restaurant_id IS DISTINCT FROM r.restaurant_id
            OR o.restaurant_id IS DISTINCT FROM r.restaurant_id

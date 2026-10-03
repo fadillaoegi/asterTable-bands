@@ -96,8 +96,12 @@ func strField(m map[string]json.RawMessage, key string, required bool) (string, 
 		}
 		return "", false, nil
 	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
+		return "", true, malformed(key + " must be a string")
+	}
 	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
+	if err := json.Unmarshal(trimmed, &s); err != nil {
 		return "", true, malformed(key + " must be a string")
 	}
 	return s, true, nil

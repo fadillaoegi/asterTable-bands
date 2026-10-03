@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestDecodeObjectCanonicalizesJSON(t *testing.T) {
@@ -30,6 +32,19 @@ func TestDecodeObjectRejectsMalformedAndWrongTopLevel(t *testing.T) {
 		if _, _, err := decodeObject(r); err == nil {
 			t.Errorf("accepted %q", body)
 		}
+	}
+}
+
+func TestStringFieldRejectsNullAndEveryNonStringType(t *testing.T) {
+	for _, raw := range []string{`null`, `true`, `1`, `[]`, `{}`} {
+		_, _, err := strField(map[string]json.RawMessage{"value": json.RawMessage(raw)}, "value", true)
+		if err == nil || err.(*apiError).Status != 400 || err.(*apiError).Code != "malformed_request" {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+	got, present, err := strField(map[string]json.RawMessage{"value": json.RawMessage(`""`)}, "value", true)
+	if err != nil || !present || got != "" {
+		t.Fatalf("empty string is still a string: got=%q present=%v err=%v", got, present, err)
 	}
 }
 
@@ -126,7 +141,15 @@ func TestIDAndPasswordRangesCountCharacters(t *testing.T) {
 	if err := validateID(strings.Repeat("é", 65), "id"); err == nil {
 		t.Fatal("65-character ID accepted")
 	}
-	if len(passwordMaterial(strings.Repeat("p", 1000))) != 32 {
+	longPassword := strings.Repeat("é", 1000)
+	if len(passwordMaterial(longPassword)) != 32 {
 		t.Fatal("password material is not fixed length")
+	}
+	hash, err := bcrypt.GenerateFromPassword(passwordMaterial(longPassword), bcrypt.MinCost)
+	if err != nil || bcrypt.CompareHashAndPassword(hash, passwordMaterial(longPassword)) != nil {
+		t.Fatalf("long password bcrypt round trip failed: %v", err)
+	}
+	if characterCount(strings.Repeat("é", 4)) != 4 {
+		t.Fatal("password character counting is not Unicode-aware")
 	}
 }
