@@ -118,3 +118,15 @@ func TestIdempotencyLockMaterialIsUnambiguousPostgresText(t *testing.T) {
 		t.Fatalf("unsafe lock material: %q / %q", a, b)
 	}
 }
+
+func TestIDAndPasswordRangesCountCharacters(t *testing.T) {
+	if err := validateID(strings.Repeat("é", 64), "id"); err != nil {
+		t.Fatalf("64-character ID rejected: %v", err)
+	}
+	if err := validateID(strings.Repeat("é", 65), "id"); err == nil {
+		t.Fatal("65-character ID accepted")
+	}
+	if len(passwordMaterial(strings.Repeat("p", 1000))) != 32 {
+		t.Fatal("password material is not fixed length")
+	}
+}

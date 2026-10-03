@@ -121,11 +121,11 @@ func getTable(ctx context.Context, q interface {
 
 func scanReservation(row pgx.Row) (Reservation, error) {
 	var r Reservation
-	err := row.Scan(&r.ID, &r.Reference, &r.UserID, &r.RestaurantID, &r.TableID, &r.PartySize, &r.Status, &r.StartsAtLocal, &r.StartsAt, &r.EndsAt, &r.CreatedAt)
+	err := row.Scan(&r.ID, &r.Reference, &r.UserID, &r.RestaurantID, &r.TableID, &r.PartySize, &r.Status, &r.StartsAtLocal, &r.StartsAt, &r.EndsAt, &r.CreatedAt, &r.Timezone)
 	return r, err
 }
 
-const reservationCols = `id,reference,user_id,restaurant_id,table_id,party_size,status,starts_at_local,starts_at,ends_at,created_at`
+const reservationCols = `id,reference,user_id,restaurant_id,table_id,party_size,status,starts_at_local,starts_at,ends_at,created_at,(SELECT timezone FROM restaurants WHERE restaurants.id=reservations.restaurant_id)`
 
 func getReservationByReference(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row

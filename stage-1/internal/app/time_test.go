@@ -36,3 +36,18 @@ func TestParseLocalDST(t *testing.T) {
 		t.Fatalf("fall overlap offset=%d, want -04:00", off)
 	}
 }
+
+func TestReservationResponseUsesRestaurantOffsetAfterDatabaseReload(t *testing.T) {
+	start := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC)
+	r := Reservation{
+		StartsAt: start, EndsAt: start.Add(90 * time.Minute),
+		CreatedAt: start, Timezone: "Europe/Berlin",
+	}
+	got := r.response()
+	if got["starts_at"] != "2026-10-25T02:30:00+02:00" {
+		t.Fatalf("starts_at = %v", got["starts_at"])
+	}
+	if got["ends_at"] != "2026-10-25T03:00:00+01:00" {
+		t.Fatalf("ends_at = %v", got["ends_at"])
+	}
+}

@@ -90,11 +90,11 @@ func (a *App) signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email = strings.ToLower(email)
-	if !emailRE.MatchString(email) || len(email) > 320 || len(password) < 8 || display == "" {
+	if !emailRE.MatchString(email) || len(email) > 320 || characterCount(password) < 8 || display == "" {
 		writeError(w, validation("invalid signup fields"))
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword(passwordMaterial(password), bcrypt.DefaultCost)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -168,7 +168,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	var uid, display string
 	var hash []byte
 	err = a.db.QueryRow(r.Context(), `SELECT id,display_name,password_hash FROM users WHERE email=$1`, strings.ToLower(email)).Scan(&uid, &display, &hash)
-	if err != nil || bcrypt.CompareHashAndPassword(hash, []byte(password)) != nil {
+	if err != nil || bcrypt.CompareHashAndPassword(hash, passwordMaterial(password)) != nil {
 		writeError(w, unauth())
 		return
 	}
@@ -210,7 +210,12 @@ func (a *App) listRestaurants(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) restaurantDetail(w http.ResponseWriter, r *http.Request) {
-	rest, err := getRestaurant(r.Context(), a.db, chi.URLParam(r, "id"))
+	id := chi.URLParam(r, "id")
+	if err := validateID(id, "restaurant id"); err != nil {
+		writeError(w, err)
+		return
+	}
+	rest, err := getRestaurant(r.Context(), a.db, id)
 	if err == pgx.ErrNoRows {
 		writeError(w, notFound())
 		return

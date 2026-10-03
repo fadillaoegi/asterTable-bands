@@ -118,12 +118,12 @@ func (a *App) moveReservations(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
-		if cutoffPassed(res, rest) {
-			writeError(w, errAPI(409, "cutoff_passed", "amendment cutoff has passed"))
-			return
-		}
 		if res.Status == "cancelled" {
 			writeError(w, errAPI(409, "reservation_cancelled", "reservation is cancelled"))
+			return
+		}
+		if cutoffPassed(res, rest) {
+			writeError(w, errAPI(409, "cutoff_passed", "amendment cutoff has passed"))
 			return
 		}
 		x, e := parseAmendment(move.Fields)

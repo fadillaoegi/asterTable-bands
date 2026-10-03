@@ -161,7 +161,7 @@ func parsePlainInt(s, name string) (int, error) {
 }
 
 func validateID(s, name string) error {
-	if s == "" || len(s) > 64 {
+	if s == "" || characterCount(s) > 64 {
 		return validation(name + " must contain 1 to 64 characters")
 	}
 	return nil
@@ -189,6 +189,13 @@ func randomReference() (string, error) {
 }
 
 func tokenHash(token string) []byte { h := sha256.Sum256([]byte(token)); return h[:] }
+
+// bcrypt rejects inputs longer than 72 bytes. Pre-hashing gives every
+// password a fixed-size bcrypt input while retaining bcrypt's salt and cost.
+func passwordMaterial(password string) []byte {
+	h := sha256.Sum256([]byte(password))
+	return h[:]
+}
 
 func formatTime(t time.Time) string { return t.Format("2006-01-02T15:04:05-07:00") }
 
@@ -231,15 +238,20 @@ type Reservation struct {
 	StartsAt      time.Time
 	EndsAt        time.Time
 	CreatedAt     time.Time
+	Timezone      string
 }
 
 func (r Reservation) response() map[string]any {
+	start, end := r.StartsAt, r.EndsAt
+	if loc, err := time.LoadLocation(r.Timezone); err == nil {
+		start, end = start.In(loc), end.In(loc)
+	}
 	return map[string]any{
 		"reservation_id": r.ID, "reference": r.Reference,
 		"restaurant_id": r.RestaurantID, "table_id": r.TableID,
 		"party_size": r.PartySize, "status": r.Status,
-		"starts_at_local": r.StartsAtLocal, "starts_at": formatTime(r.StartsAt),
-		"ends_at": formatTime(r.EndsAt), "created_at": formatTime(r.CreatedAt.UTC()),
+		"starts_at_local": r.StartsAtLocal, "starts_at": formatTime(start),
+		"ends_at": formatTime(end), "created_at": formatTime(r.CreatedAt.UTC()),
 	}
 }
 

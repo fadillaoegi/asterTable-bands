@@ -193,7 +193,7 @@ func (a *App) createReservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	_, start, end, err := validateReservationTarget(r.Context(), tx, in)
+	rest, start, end, err := validateReservationTarget(r.Context(), tx, in)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -233,7 +233,7 @@ func (a *App) createReservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, databaseWriteError(err))
 		return
 	}
-	res := Reservation{ID: id, Reference: ref, UserID: user, RestaurantID: in.RestaurantID, TableID: in.TableID, PartySize: in.PartySize, Status: "confirmed", StartsAtLocal: in.StartsLocal, StartsAt: start, EndsAt: end, CreatedAt: now}
+	res := Reservation{ID: id, Reference: ref, UserID: user, RestaurantID: in.RestaurantID, TableID: in.TableID, PartySize: in.PartySize, Status: "confirmed", StartsAtLocal: in.StartsLocal, StartsAt: start, EndsAt: end, CreatedAt: now, Timezone: rest.Timezone}
 	response, _ := json.Marshal(res.response())
 	if err = saveReceipt(r.Context(), tx, user, key, r.Method, r.URL.Path, body, response); err != nil {
 		writeError(w, err)
@@ -406,12 +406,12 @@ func (a *App) patchReservation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if cutoffPassed(res, rest) {
-		writeError(w, errAPI(409, "cutoff_passed", "amendment cutoff has passed"))
-		return
-	}
 	if res.Status == "cancelled" {
 		writeError(w, errAPI(409, "reservation_cancelled", "reservation is cancelled"))
+		return
+	}
+	if cutoffPassed(res, rest) {
+		writeError(w, errAPI(409, "cutoff_passed", "amendment cutoff has passed"))
 		return
 	}
 	in := amendedInput(res, x)

@@ -43,8 +43,6 @@ type resetFixture struct {
 		RestaurantID  string `json:"restaurant_id"`
 		TableID       string `json:"table_id"`
 		StartsAtLocal string `json:"starts_at_local"`
-		Status        string `json:"status"`
-		CreatedAt     string `json:"created_at"`
 		PartySize     int    `json:"party_size"`
 	} `json:"reservations"`
 }
@@ -75,11 +73,11 @@ func (a *App) reset(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	for _, u := range fixture.Users {
-		if validateID(u.ID, "user id") != nil || !emailRE.MatchString(strings.ToLower(u.Email)) || len(u.Password) < 8 || u.DisplayName == "" {
+		if validateID(u.ID, "user id") != nil || !emailRE.MatchString(strings.ToLower(u.Email)) || characterCount(u.Password) < 8 || u.DisplayName == "" {
 			writeError(w, validation("invalid fixture user"))
 			return
 		}
-		hash, e := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
+		hash, e := bcrypt.GenerateFromPassword(passwordMaterial(u.Password), bcrypt.DefaultCost)
 		if e != nil {
 			writeError(w, e)
 			return
@@ -135,14 +133,6 @@ func (a *App) reset(w http.ResponseWriter, r *http.Request) {
 			writeError(w, validation("invalid seeded reservation identity"))
 			return
 		}
-		status := seed.Status
-		if status == "" {
-			status = "confirmed"
-		}
-		if status != "confirmed" && status != "cancelled" {
-			writeError(w, validation("invalid reservation status"))
-			return
-		}
 		in := reservationInput{seed.RestaurantID, seed.TableID, seed.StartsAtLocal, seed.PartySize}
 		if _, e := parseCreateInput(map[string]json.RawMessage{"restaurant_id": mustJSON(in.RestaurantID), "table_id": mustJSON(in.TableID), "starts_at_local": mustJSON(in.StartsLocal), "party_size": mustJSON(in.PartySize)}); e != nil {
 			writeError(w, e)
@@ -153,21 +143,9 @@ func (a *App) reset(w http.ResponseWriter, r *http.Request) {
 			writeError(w, e)
 			return
 		}
-		created := now
-		if seed.CreatedAt != "" {
-			created, e = time.Parse(time.RFC3339, seed.CreatedAt)
-			if e != nil {
-				writeError(w, validation("invalid created_at"))
-				return
-			}
-		}
-		_, e = tx.Exec(r.Context(), `INSERT INTO reservations(id,reference,user_id,restaurant_id,table_id,party_size,status,starts_at_local,starts_at,ends_at,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, seed.ID, seed.Reference, seed.UserID, in.RestaurantID, in.TableID, in.PartySize, status, in.StartsLocal, start, end, created)
+		_, e = tx.Exec(r.Context(), `INSERT INTO reservations(id,reference,user_id,restaurant_id,table_id,party_size,status,starts_at_local,starts_at,ends_at,created_at) VALUES($1,$2,$3,$4,$5,$6,'confirmed',$7,$8,$9,$10)`, seed.ID, seed.Reference, seed.UserID, in.RestaurantID, in.TableID, in.PartySize, in.StartsLocal, start, end, now)
 		if e == nil {
-			var rangeExpr any = nil
-			if status == "confirmed" {
-				rangeExpr = "confirmed"
-			}
-			_, e = tx.Exec(r.Context(), `INSERT INTO reservation_occupancies(reservation_id,restaurant_id,table_id,conflict_range) VALUES($1,$2,$3,CASE WHEN $6::text IS NULL THEN NULL ELSE tstzrange($4,$5,'[)') END)`, seed.ID, in.RestaurantID, in.TableID, start, end, rangeExpr)
+			_, e = tx.Exec(r.Context(), `INSERT INTO reservation_occupancies(reservation_id,restaurant_id,table_id,conflict_range) VALUES($1,$2,$3,tstzrange($4,$5,'[)'))`, seed.ID, in.RestaurantID, in.TableID, start, end)
 		}
 		if e != nil {
 			writeError(w, databaseWriteError(e))
