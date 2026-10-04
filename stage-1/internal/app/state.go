@@ -163,6 +163,21 @@ func mustJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 
 var stateTables = []string{"users", "auth_sessions", "restaurants", "restaurant_opening_hours", "restaurant_tables", "reservations", "reservation_occupancies", "idempotency_receipts"}
 
+func validateImportedRestaurantTimezones(raw json.RawMessage) error {
+	var restaurants []struct {
+		Timezone string `json:"timezone"`
+	}
+	if err := json.Unmarshal(raw, &restaurants); err != nil {
+		return validation("invalid state")
+	}
+	for _, restaurant := range restaurants {
+		if _, err := time.LoadLocation(restaurant.Timezone); err != nil {
+			return validation("invalid restaurant timezone")
+		}
+	}
+	return nil
+}
+
 func (a *App) exportState(w http.ResponseWriter, r *http.Request) {
 	tx, err := a.db.BeginTx(r.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -228,6 +243,10 @@ func (a *App) importState(w http.ResponseWriter, r *http.Request) {
 			writeError(w, validation("state table must be an array"))
 			return
 		}
+	}
+	if err = validateImportedRestaurantTimezones(state["restaurants"]); err != nil {
+		writeError(w, err)
+		return
 	}
 	tx, err := a.db.Begin(r.Context())
 	if err != nil {
