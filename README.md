@@ -1,47 +1,47 @@
 # AsterTable — NightWatch Factory
 
-**AsterTable** is a restaurant reservation service. Diners search availability, book a table
-(or an approved combination), receive a stable confirmation reference, and look up, amend,
-cancel, or batch-move their bookings — safely under retries and concurrent load. The core
-invariant: two `confirmed` reservations never occupy the same table over overlapping time,
-even when up to 50 requests arrive together.
+**Team:** FLdevBoo · **Members:** Fadil Laoegi · **Track:** `tablekeeper`
+**Competition:** WeAreDevelopers × BAND — Dark Factory
+
+**AsterTable** is a restaurant reservation service. Diners search availability, book a table,
+receive a stable confirmation reference, and look up, amend, cancel, or batch-move their
+bookings — safely under retries and concurrent load. The core invariant: two `confirmed`
+reservations never occupy the same table over overlapping time, even when up to 50 requests
+arrive together.
 
 *Every table. One truthful booking.*
 
-This repository is the **graded submission** for the WeAreDevelopers × BAND Dark Factory
-competition, track `tablekeeper`. The service code in each `stage-*/` folder is produced by
-the four seats of the **NightWatch Factory** inside a Band room. Human-authored content is
-limited to the factory documents, the generic seat mandates, and the organizer-provided
-starting scaffold. Hand-built production code outside the room is not part of the deliverable.
+## How to read this repository
 
-## Layout
+| Path | What it is |
+|---|---|
+| `FACTORY.md` | **Start here.** The factory: seats, workflow and gates, how it caught bad work, design choices and costs, measured time and spend, what failed, and every human action during the run |
+| `mandates/` | Generic, domain-independent rules for the four seats (Coordinator, Implementer, Conformance Reviewer, Adversarial Verifier). Each names its harness and model |
+| `room.json` | The unchanged full-session export of the Band room the factory worked in |
+| `stage-1/` | Stage 1 — the reservation JSON API, as last committed by the seats (`b637b81`). Official harness, isolated mode: Stage 1 120/120. One open finding from the factory's own review is documented in `FACTORY.md` §3 and §7 |
 
-- `mandates/`: generic, domain-independent operating rules for the four seats
-  (Coordinator, Implementer, Conformance Reviewer, Adversarial Verifier).
-- `stage-1/` … `stage-4/`: cumulative, independently buildable services produced by the room.
-  Each stage folder is a complete service with source, `Dockerfile`, and `RUN.md`; each claims
-  only its own stage. `stage-2/` extends a copy of `stage-1/`, and so on.
-- `FACTORY.md`: how the factory is organized, how it works, and its measured results.
-- `room.json`: the unchanged full-session export of the Band room, added after the run.
+Every `stage-N/` folder is a complete service (source, `Dockerfile`, `RUN.md`) produced by the
+seats inside the Band room, and claims only its own stage. Human-authored content is limited to
+`README.md`, `FACTORY.md` and `mandates/`. The git history is the seats' history, unedited, followed by
+one documentation commit by the owner.
+
+## Run a stage
+
+From the stage folder, follow its `RUN.md` (one command builds and starts the service). The image
+listens on `0.0.0.0:$PORT` (default 8080), starts PostgreSQL 18 internally, needs no outbound
+network at runtime, and becomes healthy within 60 s.
+
+## Verify
+
+From the organizers' kickoff checkout, with its Python environment:
+
+```sh
+python -m harness check --track tablekeeper <path-to-this-repo>
+python -m harness run --track tablekeeper --repo <path-to-this-repo> --all --mode isolated
+```
 
 ## Technology
 
-Go 1.26 (`net/http` + chi) · `pgx/v5` · **PostgreSQL 18** embedded in a single runtime image
+Go 1.26 (`net/http` + chi) · `pgx/v5` · PostgreSQL 18 embedded in one runtime image
 (`btree_gist`, deferrable GiST exclusion constraint for the no-double-booking invariant) ·
-React 19 + TypeScript (from Stage 2) · bcrypt password hashing · IANA tzdata for DST.
-The image listens on `0.0.0.0:$PORT` (default 8080), starts PostgreSQL internally, needs no
-outbound network at runtime, and becomes healthy within 60 s.
-
-## Verification
-
-Run from the official kickoff checkout at `/Users/boo/Github/project/astertable/kickoff`
-with its `.venv`:
-
-```sh
-# per-stage acceptance
-./.venv/bin/python -m harness run --track tablekeeper --repo <this-repo> --stage N --out <out-dir>
-# offline eligibility check
-./.venv/bin/python -m harness check --track tablekeeper <this-repo>
-```
-
-Each stage must report `claimed stage: N`, and the offline check must report no problems.
+bcrypt password hashing · IANA tzdata for time zones and DST.
