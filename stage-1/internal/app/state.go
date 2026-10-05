@@ -163,6 +163,51 @@ func mustJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 
 var stateTables = []string{"users", "auth_sessions", "restaurants", "restaurant_opening_hours", "restaurant_tables", "reservations", "reservation_occupancies", "idempotency_receipts"}
 
+type importedRestaurantState struct {
+	ID              string `json:"id"`
+	Timezone        string `json:"timezone"`
+	SlotMinutes     int    `json:"slot_minutes"`
+	DurationMinutes int    `json:"reservation_duration_minutes"`
+}
+
+type importedOpeningState struct {
+	RestaurantID string `json:"restaurant_id"`
+	Weekday      int    `json:"weekday"`
+	Opens        string `json:"opens"`
+	Closes       string `json:"closes"`
+}
+
+type importedTableState struct {
+	ID           string `json:"id"`
+	RestaurantID string `json:"restaurant_id"`
+	Capacity     int    `json:"capacity"`
+}
+
+type importedReservationState struct {
+	UserID       string    `json:"user_id"`
+	RestaurantID string    `json:"restaurant_id"`
+	TableID      string    `json:"table_id"`
+	PartySize    int       `json:"party_size"`
+	StartsLocal  string    `json:"starts_at_local"`
+	StartsAt     time.Time `json:"starts_at"`
+	EndsAt       time.Time `json:"ends_at"`
+}
+
+type importedTableKey struct {
+	RestaurantID string
+	TableID      string
+}
+
+type importedOpeningKey struct {
+	RestaurantID string
+	Weekday      int
+}
+
+type importedOpeningRange struct {
+	Opens  int
+	Closes int
+}
+
 func validateImportedRestaurantTimezones(raw json.RawMessage) error {
 	var restaurants []struct {
 		Timezone string `json:"timezone"`
@@ -176,6 +221,118 @@ func validateImportedRestaurantTimezones(raw json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func validateImportedStateSemantics(state map[string]json.RawMessage) error {
+	if err := validateImportedRestaurantTimezones(state["restaurants"]); err != nil {
+		return err
+	}
+
+	var users []struct {
+		ID string `json:"id"`
+	}
+	var restaurants []importedRestaurantState
+	var openingHours []importedOpeningState
+	var tables []importedTableState
+	var reservations []importedReservationState
+	if json.Unmarshal(state["users"], &users) != nil ||
+		json.Unmarshal(state["restaurants"], &restaurants) != nil ||
+		json.Unmarshal(state["restaurant_opening_hours"], &openingHours) != nil ||
+		json.Unmarshal(state["restaurant_tables"], &tables) != nil ||
+		json.Unmarshal(state["reservations"], &reservations) != nil {
+		return validation("invalid state")
+	}
+
+	userIDs := make(map[string]struct{}, len(users))
+	for _, user := range users {
+		if validateID(user.ID, "user id") != nil {
+			return validation("invalid state")
+		}
+		userIDs[user.ID] = struct{}{}
+	}
+	restaurantsByID := make(map[string]importedRestaurantState, len(restaurants))
+	for _, restaurant := range restaurants {
+		if validateID(restaurant.ID, "restaurant id") != nil || restaurant.SlotMinutes < 1 || restaurant.DurationMinutes < 1 {
+			return validation("invalid state")
+		}
+		restaurantsByID[restaurant.ID] = restaurant
+	}
+	openingsByRestaurantDay := make(map[importedOpeningKey]importedOpeningRange, len(openingHours))
+	for _, opening := range openingHours {
+		if _, ok := restaurantsByID[opening.RestaurantID]; !ok || opening.Weekday < 0 || opening.Weekday > 6 {
+			return validation("invalid state")
+		}
+		opens, ok := importedWallMinutes(opening.Opens)
+		if !ok {
+			return validation("invalid state")
+		}
+		closes, ok := importedWallMinutes(opening.Closes)
+		if !ok || closes <= opens {
+			return validation("invalid state")
+		}
+		key := importedOpeningKey{RestaurantID: opening.RestaurantID, Weekday: opening.Weekday}
+		if _, duplicate := openingsByRestaurantDay[key]; duplicate {
+			return validation("invalid state")
+		}
+		openingsByRestaurantDay[key] = importedOpeningRange{Opens: opens, Closes: closes}
+	}
+	tablesByID := make(map[importedTableKey]importedTableState, len(tables))
+	for _, table := range tables {
+		if validateID(table.ID, "table id") != nil || validateID(table.RestaurantID, "restaurant id") != nil || table.Capacity < 1 {
+			return validation("invalid state")
+		}
+		if _, ok := restaurantsByID[table.RestaurantID]; !ok {
+			return validation("invalid state")
+		}
+		tablesByID[importedTableKey{RestaurantID: table.RestaurantID, TableID: table.ID}] = table
+	}
+
+	for _, reservation := range reservations {
+		if _, ok := userIDs[reservation.UserID]; !ok {
+			return validation("invalid state")
+		}
+		restaurant, ok := restaurantsByID[reservation.RestaurantID]
+		if !ok {
+			return validation("invalid state")
+		}
+		table, ok := tablesByID[importedTableKey{RestaurantID: reservation.RestaurantID, TableID: reservation.TableID}]
+		if !ok || reservation.PartySize < 1 || reservation.PartySize > table.Capacity {
+			return validation("invalid state")
+		}
+		location, err := time.LoadLocation(restaurant.Timezone)
+		if err != nil {
+			return validation("invalid state")
+		}
+		expectedStart, err := parseLocal(reservation.StartsLocal, location)
+		if err != nil {
+			return validation("invalid state")
+		}
+		expectedEnd := expectedStart.Add(time.Duration(restaurant.DurationMinutes) * time.Minute)
+		if !reservation.StartsAt.Equal(expectedStart) || !reservation.EndsAt.Equal(expectedEnd) {
+			return validation("invalid state")
+		}
+		wall, err := time.Parse("2006-01-02T15:04", reservation.StartsLocal)
+		if err != nil {
+			return validation("invalid state")
+		}
+		opening, ok := openingsByRestaurantDay[importedOpeningKey{RestaurantID: reservation.RestaurantID, Weekday: int(wall.Weekday())}]
+		minute := wall.Hour()*60 + wall.Minute()
+		if !ok || minute < opening.Opens || minute+restaurant.DurationMinutes > opening.Closes || (minute-opening.Opens)%restaurant.SlotMinutes != 0 {
+			return validation("invalid state")
+		}
+	}
+	return nil
+}
+
+func importedWallMinutes(value string) (int, bool) {
+	parsed, err := time.Parse("15:04:05", value)
+	if err != nil {
+		parsed, err = time.Parse("15:04", value)
+	}
+	if err != nil || parsed.Second() != 0 || parsed.Nanosecond() != 0 {
+		return 0, false
+	}
+	return parsed.Hour()*60 + parsed.Minute(), true
 }
 
 func (a *App) exportState(w http.ResponseWriter, r *http.Request) {
@@ -239,12 +396,12 @@ func (a *App) importState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var arr []json.RawMessage
-		if json.Unmarshal(raw, &arr) != nil {
+		if json.Unmarshal(raw, &arr) != nil || arr == nil {
 			writeError(w, validation("state table must be an array"))
 			return
 		}
 	}
-	if err = validateImportedRestaurantTimezones(state["restaurants"]); err != nil {
+	if err = validateImportedStateSemantics(state); err != nil {
 		writeError(w, err)
 		return
 	}
