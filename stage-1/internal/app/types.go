@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -282,29 +283,65 @@ func parseLocal(local string, loc *time.Location) (time.Time, error) {
 // about the shape of historical offsets (some include unusual minutes or
 // seconds), detects gaps, and retains both occurrences of folds.
 var localDayCache = struct {
-	sync.Mutex
+	sync.RWMutex
 	days map[string]map[string][]time.Time
 }{days: make(map[string]map[string][]time.Time)}
 
 func localDay(loc *time.Location, wall time.Time) map[string][]time.Time {
 	key := loc.String() + "\x00" + wall.Format("2006-01-02")
-	localDayCache.Lock()
-	defer localDayCache.Unlock()
+	localDayCache.RLock()
 	if day, ok := localDayCache.days[key]; ok {
+		localDayCache.RUnlock()
 		return day
 	}
+	localDayCache.RUnlock()
 
 	day := make(map[string][]time.Time, 24*60)
 	base := time.Date(wall.Year(), wall.Month(), wall.Day(), 0, 0, 0, 0, time.UTC)
-	// All IANA UTC offsets are within 24 hours. The margin also covers
-	// historical date-line transitions while keeping the scan bounded.
-	for instant, end := base.Add(-26*time.Hour), base.Add(50*time.Hour); instant.Before(end); instant = instant.Add(time.Second) {
+	// Enumerate the offsets in force around this local day, then validate each
+	// wall-minute candidate by round-tripping it through the location. This
+	// follows the loaded IANA rules (including historical second-level offsets),
+	// detects gaps, and retains both fold occurrences without scanning every UTC
+	// second. All IANA offsets are within 24 hours; the wider transition window also
+	// covers historical date-line changes.
+	offsets := map[int]struct{}{}
+	windowEnd := base.Add(60 * time.Hour)
+	for instant := base.Add(-36 * time.Hour); !instant.After(windowEnd); {
 		zoned := instant.In(loc)
-		if zoned.Year() != wall.Year() || zoned.Month() != wall.Month() || zoned.Day() != wall.Day() || zoned.Second() != 0 {
-			continue
+		_, offset := zoned.Zone()
+		offsets[offset] = struct{}{}
+		_, zoneEnd := zoned.ZoneBounds()
+		if zoneEnd.IsZero() || zoneEnd.After(windowEnd) {
+			break
 		}
-		minute := zoned.Format("15:04")
-		day[minute] = append(day[minute], instant)
+		if !zoneEnd.After(instant) {
+			instant = instant.Add(time.Second)
+		} else {
+			instant = zoneEnd
+		}
+	}
+	for minute := 0; minute < 24*60; minute++ {
+		wallMinute := base.Add(time.Duration(minute) * time.Minute)
+		matches := make([]time.Time, 0, 2)
+		for offset := range offsets {
+			instant := wallMinute.Add(-time.Duration(offset) * time.Second)
+			zoned := instant.In(loc)
+			if zoned.Year() != wall.Year() || zoned.Month() != wall.Month() || zoned.Day() != wall.Day() ||
+				zoned.Hour() != minute/60 || zoned.Minute() != minute%60 || zoned.Second() != 0 {
+				continue
+			}
+			matches = append(matches, instant)
+		}
+		if len(matches) != 0 {
+			sort.Slice(matches, func(i, j int) bool { return matches[i].Before(matches[j]) })
+			day[wallMinute.Format("15:04")] = matches
+		}
+	}
+
+	localDayCache.Lock()
+	if cached, ok := localDayCache.days[key]; ok {
+		localDayCache.Unlock()
+		return cached
 	}
 	// Bound memory under arbitrary-date traffic. Eviction is intentionally
 	// simple because entries are immutable and inexpensive to rebuild.
@@ -315,6 +352,7 @@ func localDay(loc *time.Location, wall time.Time) map[string][]time.Time {
 		}
 	}
 	localDayCache.days[key] = day
+	localDayCache.Unlock()
 	return day
 }
 

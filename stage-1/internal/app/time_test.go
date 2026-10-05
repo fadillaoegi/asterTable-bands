@@ -1,6 +1,7 @@
 package app
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -79,4 +80,49 @@ func TestParseLocalUsesHistoricalIANAOffset(t *testing.T) {
 	if err != nil || got.Format("2006-01-02T15:04:05-07:00") != "1938-01-03T12:00:00+00:20" {
 		t.Fatalf("+00:20 time = %s, err=%v", got.Format("2006-01-02T15:04:05-07:00"), err)
 	}
+}
+
+func TestLocalDayMatchesIANASecondScanAtTransitions(t *testing.T) {
+	for _, test := range []struct {
+		zone string
+		date string
+	}{
+		{"Europe/Berlin", "2026-03-29"},
+		{"Europe/Berlin", "2026-10-25"},
+		{"America/New_York", "2026-03-08"},
+		{"America/New_York", "2026-11-01"},
+		{"Europe/Amsterdam", "1938-01-03"},
+		{"Australia/Lord_Howe", "2026-04-05"},
+		{"Pacific/Apia", "2011-12-30"},
+	} {
+		t.Run(test.zone+"/"+test.date, func(t *testing.T) {
+			location, err := time.LoadLocation(test.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wall, err := time.Parse("2006-01-02", test.date)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := localDay(location, wall)
+			want := localDayBySecondScan(location, wall)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("optimized local day differs from IANA second scan")
+			}
+		})
+	}
+}
+
+func localDayBySecondScan(location *time.Location, wall time.Time) map[string][]time.Time {
+	day := make(map[string][]time.Time, 24*60)
+	base := time.Date(wall.Year(), wall.Month(), wall.Day(), 0, 0, 0, 0, time.UTC)
+	for instant, end := base.Add(-26*time.Hour), base.Add(50*time.Hour); instant.Before(end); instant = instant.Add(time.Second) {
+		zoned := instant.In(location)
+		if zoned.Year() != wall.Year() || zoned.Month() != wall.Month() || zoned.Day() != wall.Day() || zoned.Second() != 0 {
+			continue
+		}
+		minute := zoned.Format("15:04")
+		day[minute] = append(day[minute], instant)
+	}
+	return day
 }
